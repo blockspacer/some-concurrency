@@ -74,8 +74,19 @@ namespace multithread
 
 		std::for_each(blockStart, end, function);
 
-		for (size_t i = 0; i < amountOfThreads; ++i)
-			futures[i].get();
+		try
+		{
+			for (size_t i = 0; i < amountOfThreads; ++i)
+				futures[i].get();
+		}
+		catch (std::exception const& e)
+		{
+			std::cerr << e.what() << std::endl;
+		}
+		catch (...)
+		{
+			std::cerr << "Unknown exception" << std::endl;
+		}
 	}
 
 	// -------------------------------------------------------------------------------------------------------------
