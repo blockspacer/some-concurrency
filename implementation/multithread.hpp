@@ -12,7 +12,7 @@
 namespace multithread
 {
 	using size_t = unsigned int;
-	constexpr size_t minPerThread = 8;
+	constexpr size_t minPerThread = 8;  // just for testing. change this value for real using
 
 	// -------------------------------------------------------------------------------------------------------------
 	// for automatically joining all threads in vector
