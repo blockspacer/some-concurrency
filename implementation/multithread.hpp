@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <iterator>
 #include <exception>
+#include <numeric>
 #include <future>
 #include <vector>
 
@@ -49,7 +50,7 @@ namespace multithread
 		const size_t maxThreads = hardwareThreads ? hardwareThreads : 2;
 
 		const size_t amountOfThreads = std::min(maxThreads, static_cast<const size_t>(length / minPerThread));
-		const size_t blockSize = amountOfThreads ? length / amountOfThreads : 0;
+		const size_t blockSize = length / (amountOfThreads + 1);
 
 		std::vector<std::future<void>> futures(amountOfThreads);
 		std::vector<std::thread> threads(amountOfThreads);
@@ -130,8 +131,8 @@ namespace multithread
 		const size_t hardwareThreads = std::thread::hardware_concurrency();
 		const size_t maxThreads = hardwareThreads ? hardwareThreads : 2;
 
-		const size_t amountOfThreads = std::min(maxThreads, static_cast<const size_t>(length / minPerThread));
-		const size_t blockSize = amountOfThreads ? amountOfThreads / length : 0;
+		const size_t amountOfThreads = std::min(maxThreads, static_cast<size_t>(length / minPerThread));
+		const size_t blockSize = length / (amountOfThreads + 1);
 
 		std::promise<Iterator> result;
 		std::atomic<bool> doneFlag(false);
@@ -146,7 +147,7 @@ namespace multithread
 			for (size_t i = 0; i < amountOfThreads; ++i)
 			{
 				Iterator blockEnd = blockStart;
-				std::advance(blockStart, blockSize);
+				std::advance(blockEnd, blockSize);
 				threads[i] = std::thread(findElement(), blockStart, blockEnd, match, &result, &doneFlag);
 
 				blockStart = blockEnd;
@@ -159,6 +160,97 @@ namespace multithread
 			return last;
 
 		return result.get_future().get();
+
+	}
+
+	// -------------------------------------------------------------------------------------------------------------
+	// std::partial_sum with using concurrency 
+
+	template<typename Iterator>
+	void partial_sum(Iterator first, Iterator last)
+	{
+		using valueType = typename std::iterator_traits<Iterator>::value_type;
+
+		struct processChunk
+		{
+			void operator()(Iterator begin, Iterator end,
+				std::future<valueType>* prevEndValue, std::promise<valueType>* endValue)
+			{
+				try
+				{
+					auto tempEnd = end;
+					++tempEnd;
+					std::partial_sum(begin, tempEnd, begin);
+					if (prevEndValue)
+					{
+						const valueType addend = prevEndValue->get();
+					
+						std::for_each(begin, tempEnd, [addend](valueType& item)
+						{
+							item += addend;
+						});
+
+						if (endValue)
+							endValue->set_value(*end);
+						
+
+					}
+					else if (endValue)
+						endValue->set_value(*end);
+
+				} 
+
+				catch (...)
+				{
+					if (endValue)
+						endValue->set_exception(std::current_exception());
+					else
+						throw;
+				}
+			}
+		};
+
+		const typename std::iterator_traits<Iterator>::difference_type length = std::distance(first, last);
+
+		if (!length)
+			return;
+
+		const size_t hardwareThreads = std::thread::hardware_concurrency();
+		const size_t maxThreads = hardwareThreads ? hardwareThreads : 2;
+
+		const size_t amountOfThreads = std::min(maxThreads, static_cast<size_t>(length / minPerThread));
+		const size_t blockSize = length / (amountOfThreads + 1);
+
+		std::vector<std::thread> threads(amountOfThreads - 1);
+		std::vector<std::promise<valueType>> endValues(amountOfThreads - 1);
+		std::vector<std::future<valueType>> prevEndValues;
+		prevEndValues.reserve(amountOfThreads - 1);
+
+		joinThreads joiner(threads);
+
+		Iterator blockStart = first;
+		size_t i;
+
+		for(i = 0; i < amountOfThreads - 1; ++i)
+		{
+
+			Iterator blockEnd = blockStart;
+			std::advance(blockEnd, blockSize - 1); 
+			threads[i] = std::thread(processChunk(), blockStart, blockEnd,
+				i > 0 ? &prevEndValues[i - 1] : nullptr, &endValues[i]);
+			
+			threads[i].join();
+			blockStart = blockEnd;
+			++blockStart;
+			prevEndValues.emplace_back(endValues[i].get_future());
+			
+		}
+
+		Iterator finalElement = blockStart;
+		std::advance(finalElement, std::distance(blockStart, last) - 1);
+		processChunk()(blockStart, finalElement,
+			amountOfThreads ? &prevEndValues.back() : nullptr, nullptr);
+
 
 	}
 }
